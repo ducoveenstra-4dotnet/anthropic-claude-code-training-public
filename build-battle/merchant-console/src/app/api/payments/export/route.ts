@@ -1,25 +1,47 @@
 import { filterPayments, parseFilters, sortPayments } from "@/data/queries"
-import { exportFilename, toCsv } from "@/lib/csv"
-import { NextRequest } from "next/server"
+import {
+  exportFilename,
+  exportLabel,
+  parseExportColumns,
+  parseExportScope,
+  toCsv,
+} from "@/lib/csv"
+import { NextRequest, NextResponse } from "next/server"
 
 /**
  * Exports the payments table as CSV.
  *
- * Honors the active filters and reuses the query builder, but the column set
- * and the scope are fixed. Giving ops control over both is NWP-101.
+ * Ops picks the columns and the scope (NWP-101). Both are validated against
+ * an allowlist before anything else runs, and rows come from the one query
+ * builder, unpaginated, so the file holds every matching payment.
  */
 export function GET(request: NextRequest) {
-  const filters = parseFilters(request.nextUrl.searchParams)
+  const params = request.nextUrl.searchParams
+
+  const scope = parseExportScope(params.get("scope"))
+  if (!scope.ok) {
+    return NextResponse.json({ message: scope.message }, { status: 400 })
+  }
+
+  const columns = parseExportColumns(params.get("columns"))
+  if (!columns.ok) {
+    return NextResponse.json({ message: columns.message }, { status: 400 })
+  }
+
+  // "all" drops the filters but keeps the requested sort order.
+  const parsed = parseFilters(params)
+  const filters = scope.value === "all" ? {} : parsed
   const rows = sortPayments(
     filterPayments(filters),
-    filters.sort,
-    filters.direction,
+    parsed.sort,
+    parsed.direction,
   )
+  const filename = exportFilename(new Date(), exportLabel(scope.value, filters))
 
-  return new Response(toCsv(rows), {
+  return new Response(toCsv(rows, columns.value), {
     headers: {
       "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="${exportFilename()}"`,
+      "content-disposition": `attachment; filename="${filename}"`,
     },
   })
 }
